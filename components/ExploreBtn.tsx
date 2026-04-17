@@ -16,7 +16,13 @@ const ExploreBtn = () => {
         }}
       >
         Explore Events
-        <Image src={arrowDown} alt="arrow-down" width={16} height={16} />
+        <Image
+          src={arrowDown}
+          alt="arrow-down"
+          width={16}
+          height={16}
+          style={{ width: '16px', height: '16px' }}
+        />
       </button>
     </div>
   );
