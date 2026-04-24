@@ -1,35 +1,98 @@
 import Image from "next/image";
 import { notFound } from "next/navigation";
 
+import BookingEvent from "@/components/BookingEvent";
+import Booking from "@/database/booking.model";
 import Event from "@/database/event.model";
 import connectDB from "@/lib/mongodb";
 
-type EventMode = "online" | "offline" | "hybrid";
+type AgendaItem = {
+  time: string;
+  activity: string;
+};
 
-type EventDetails = {
-  title: string;
-  slug: string;
+type EventPageData = {
+  _id: string;
   description: string;
-  overview: string;
   image: string;
-  venue: string;
-  location: string;
+  overview: string;
   date: string;
   time: string;
-  mode: EventMode;
-  audience: string;
+  location: string;
+  mode: string;
   agenda: string[];
-  organizer: string;
+  audience: string;
   tags: string[];
+  organizer: string;
 };
 
 type EventPageProps = {
-  params: Promise<{
-    slug: string;
-  }>;
+  params: Promise<{ slug: string }>;
+};
+
+type EventDetailsItemProps = {
+  icon: string;
+  alt: string;
+  label: string;
+};
+
+type EventAgendaProps = {
+  agendaItems: AgendaItem[];
+};
+
+type EventTagsProps = {
+  tags: string[];
 };
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function EventDetailsItem({ icon, alt, label }: EventDetailsItemProps) {
+  return (
+    <div className="flex flex-row items-center gap-2">
+      <Image src={icon} alt={alt} width={16} height={16} />
+      <p>{label}</p>
+    </div>
+  );
+}
+
+function EventAgenda({ agendaItems }: EventAgendaProps) {
+  if (agendaItems.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="agenda">
+      <h2>Agenda</h2>
+      <ul>
+        {agendaItems.map((item) => (
+          <li
+            key={`${item.time}-${item.activity}`}
+            className="flex flex-row items-center gap-2"
+          >
+            <p>{item.time}</p>
+            <p>{item.activity}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function EventTags({ tags }: EventTagsProps) {
+  if (tags.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-row flex-wrap gap-2">
+      {tags.map((tag) => (
+        <div className="pill" key={tag}>
+          {tag}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function parseSlug(value: string): string {
   const normalizedSlug = value.trim().toLowerCase();
@@ -41,174 +104,167 @@ function parseSlug(value: string): string {
   return normalizedSlug;
 }
 
-function hasRequiredEventData(event: EventDetails | null): event is EventDetails {
-  return Boolean(
-    event &&
-      event.title &&
-      event.description &&
-      event.overview &&
-      event.image &&
-      event.venue &&
-      event.location &&
-      event.date &&
-      event.time &&
-      event.mode &&
-      event.organizer &&
-      event.audience &&
-      Array.isArray(event.agenda) &&
-      event.agenda.length > 0 &&
-      Array.isArray(event.tags)
-  );
+function parseAgendaItems(agenda: string[]): AgendaItem[] {
+  if (!Array.isArray(agenda) || agenda.length === 0) {
+    return [];
+  }
+
+  const firstItem = agenda[0];
+
+  try {
+    const parsed = JSON.parse(firstItem) as unknown;
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.flatMap((item) => {
+      if (
+        typeof item === "object" &&
+        item !== null &&
+        "time" in item &&
+        "activity" in item &&
+        typeof item.time === "string" &&
+        typeof item.activity === "string"
+      ) {
+        return [{ time: item.time, activity: item.activity }];
+      }
+
+      return [];
+    });
+  } catch {
+    return agenda
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => ({ time: "", activity: item }));
+  }
 }
 
-async function getEventBySlug(slug: string): Promise<EventDetails> {
+function parseTags(tags: string[]): string[] {
+  if (!Array.isArray(tags) || tags.length === 0) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(tags[0]) as unknown;
+    if (!Array.isArray(parsed)) {
+      return tags.filter(Boolean);
+    }
+
+    return parsed.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0);
+  } catch {
+    return tags.filter((tag) => tag.trim().length > 0);
+  }
+}
+
+async function getEvent(slug: string): Promise<EventPageData> {
   await connectDB();
 
   const event = await Event.findOne({ slug })
     .select(
-      "title slug description overview image venue location date time mode audience agenda organizer tags"
+      "_id description image overview date time location mode agenda audience tags organizer"
     )
-    .lean<EventDetails | null>();
+    .lean<EventPageData | null>();
 
-  if (!hasRequiredEventData(event)) {
+  if (
+    !event ||
+    !event.description ||
+    !event.image ||
+    !event.overview ||
+    !event.date ||
+    !event.time ||
+    !event.location ||
+    !event.mode
+  ) {
     notFound();
   }
 
   return event;
 }
 
-function formatMode(mode: EventMode): string {
-  return mode.charAt(0).toUpperCase() + mode.slice(1);
+async function getBookingsCount(eventId: string): Promise<number> {
+  return Booking.countDocuments({ eventId });
 }
 
 export default async function EventDetailsPage({ params }: EventPageProps) {
   const { slug: rawSlug } = await params;
   const slug = parseSlug(rawSlug);
-  const event = await getEventBySlug(slug);
+  const event = await getEvent(slug);
+  const bookings = await getBookingsCount(event._id);
+  const agendaItems = parseAgendaItems(event.agenda);
+  const parsedTags = parseTags(event.tags);
 
   return (
-    <section id="event" className="space-y-10">
+    <section id="event">
       <div className="header">
-        <span className="pill">{formatMode(event.mode)}</span>
-        <h1>{event.title}</h1>
-        <p>{event.description}</p>
+        <h1>Event Description</h1>
+        <p className="mt-2">{event.description}</p>
       </div>
 
       <div className="details">
         <div className="content">
-          <div className="relative aspect-[16/9] w-full overflow-hidden rounded-lg">
-            <Image
-              src={event.image}
-              alt={event.title}
-              fill
-              priority
-              quality={95}
-              className="banner object-cover"
-              sizes="(max-width: 1024px) 100vw, 66vw"
+          <Image
+            src={event.image}
+            alt="Event Banner"
+            width={1200}
+            height={800}
+            quality={95}
+            className="banner"
+          />
+
+          <section className="flex-col-gap-2">
+            <h2>Overview</h2>
+            <p>{event.overview}</p>
+
+            <EventDetailsItem
+              icon="/icons/calendar.svg"
+              alt="calendar icon"
+              label={event.date}
             />
-          </div>
+            <EventDetailsItem
+              icon="/icons/clock.svg"
+              alt="clock icon"
+              label={event.time}
+            />
+            <EventDetailsItem
+              icon="/icons/pin.svg"
+              alt="pin icon"
+              label={event.location}
+            />
+            <EventDetailsItem
+              icon="/icons/mode.svg"
+              alt="mode icon"
+              label={event.mode}
+            />
+            <EventDetailsItem
+              icon="/icons/audience.svg"
+              alt="audience icon"
+              label={event.audience}
+            />
+          </section>
 
-          <div className="glass card-shadow flex flex-col gap-6 rounded-lg border border-border-dark p-6">
-            <div className="flex flex-wrap gap-3">
-              <span className="pill">{event.date}</span>
-              <span className="pill">{event.time}</span>
-              <span className="pill">{event.venue}</span>
-              <span className="pill">{event.location}</span>
-            </div>
+          <EventAgenda agendaItems={agendaItems} />
 
-            <div className="flex-col-gap-2">
-              <h2>Overview</h2>
-              <p>{event.overview}</p>
-            </div>
+          <section className="flex-col-gap-2">
+            <h2>About the Organizer</h2>
+            <p>{event.organizer}</p>
+          </section>
 
-            <div className="grid gap-6 md:grid-cols-2">
-              <div className="flex-col-gap-2">
-                <h3>Event Details</h3>
-                <ul className="space-y-2">
-                  <li>
-                    <strong>Organizer:</strong> {event.organizer}
-                  </li>
-                  <li>
-                    <strong>Audience:</strong> {event.audience}
-                  </li>
-                  <li>
-                    <strong>Venue:</strong> {event.venue}
-                  </li>
-                  <li>
-                    <strong>Location:</strong> {event.location}
-                  </li>
-                </ul>
-              </div>
-
-              <div className="agenda">
-                <h3>Agenda</h3>
-                <ul className="space-y-2">
-                  {event.agenda.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-
-            {event.tags.length > 0 ? (
-              <div className="flex flex-wrap gap-3">
-                {event.tags.map((tag) => (
-                  <span key={tag} className="pill">
-                    #{tag}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-          </div>
+          <EventTags tags={parsedTags} />
         </div>
 
         <aside className="booking">
           <div className="signup-card">
-            <div className="flex-col-gap-2">
-              <h2>Book Your Spot</h2>
-              <p>Reserve your seat and get event updates sent straight to your inbox.</p>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="glass rounded-lg border border-border-dark p-4">
-                <p className="text-sm text-light-200">Starts</p>
-                <p>{event.date}</p>
-              </div>
-              <div className="glass rounded-lg border border-border-dark p-4">
-                <p className="text-sm text-light-200">Format</p>
-                <p>{formatMode(event.mode)}</p>
-              </div>
-            </div>
-
-            <form id="book-event">
-              <input type="hidden" name="slug" value={event.slug} />
-
-              <div>
-                <label htmlFor="name">Name</label>
-                <input
-                  type="text"
-                  id="name"
-                  name="name"
-                  autoComplete="name"
-                  placeholder="Your full name"
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="email">Email</label>
-                <input
-                  type="email"
-                  id="email"
-                  name="email"
-                  autoComplete="email"
-                  placeholder="you@example.com"
-                  required
-                />
-              </div>
-
-              <button type="submit">Book Now</button>
-            </form>
+            <h2>Book Your Spot</h2>
+            {bookings > 0 ? (
+              <p>
+                {bookings} {bookings === 1 ? "person has" : "people have"} booked
+                for this event.
+              </p>
+            ) : (
+              <p>Be the first to book for this event!</p>
+            )}
+            <BookingEvent />
           </div>
         </aside>
       </div>
